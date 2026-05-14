@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "scheduler": {
+      "command": "bun",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/server.ts"]
+    }
+  }
+}

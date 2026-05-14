@@ -1,0 +1,6 @@
+{
+  "name": "scheduler-channel",
+  "description": "Scheduler channel for Claude Code — emits cron-driven events into a running session. Define recurring jobs in jobs.json, each fires as a subprocess and reports back as a <channel> event. Manage via /scheduler:add, /scheduler:list, /scheduler:remove, /scheduler:run.",
+  "version": "0.0.1",
+  "keywords": ["scheduler", "cron", "channel", "mcp", "automation"]
+}
