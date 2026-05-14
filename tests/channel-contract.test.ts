@@ -21,7 +21,7 @@
  */
 
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -159,6 +159,18 @@ async function fire(s: Server, name: string): Promise<void> {
 function writeJobs(stateDir: string, jobs: any[]): void {
   mkdirSync(stateDir, { recursive: true })
   writeFileSync(join(stateDir, 'jobs.json'), JSON.stringify({ jobs }, null, 2))
+}
+
+// Atomic rename — mirrors Claude Code's Write tool and most editors:
+// write to a sibling temp file, then rename(2) it into place. The original
+// inode is unlinked. A file-level fs.watch attached to the old inode goes
+// stale; watching the parent directory survives.
+function writeJobsAtomic(stateDir: string, jobs: any[]): void {
+  mkdirSync(stateDir, { recursive: true })
+  const file = join(stateDir, 'jobs.json')
+  const tmp = file + '.tmp'
+  writeFileSync(tmp, JSON.stringify({ jobs }, null, 2))
+  renameSync(tmp, file)
 }
 
 describe('channel handshake', () => {
@@ -443,6 +455,35 @@ describe('jobs.json file watcher', () => {
       8000,
     )
     expect(note.params.meta.status).toBe('ok')
+  })
+
+  test('survives repeated atomic-rename writes to jobs.json (regression: single-file watch goes stale)', async () => {
+    // Pre-fix, server.ts called chokidar.watch(JOBS_FILE, ...). On macOS
+    // (and Linux), a file-level fs.watch is bound to the inode; once the
+    // file is replaced via write-temp + rename, that inode is unlinked
+    // and the watcher fires no further events — scheduled fires for any
+    // post-startup edit silently drop. The fix is to watch STATE_DIR at
+    // depth 0 and filter to JOBS_FILE.
+    writeJobsAtomic(stateDir, [])
+    server = await spawnServer(stateDir)
+    await initialize(server)
+
+    // Three successive atomic renames. Pre-fix: only the first reloads.
+    const tags = ['one', 'two', 'three']
+    for (const tag of tags) {
+      writeJobsAtomic(stateDir, [{
+        name: `after-${tag}`,
+        cron: '0 0 1 1 *',
+        prompt: 'echo ok; exit 0',
+        report_back: 'summary',
+        timeout_seconds: 10,
+      }])
+      // chokidar awaitWriteFinish stabilityThreshold (200ms) + headroom
+      await new Promise(r => setTimeout(r, 600))
+    }
+
+    const reloads = server.stderr.filter(l => l.includes('scheduler: reloaded jobs.json'))
+    expect(reloads.length).toBe(tags.length)
   })
 
   test('does not crash on corrupt jobs.json', async () => {

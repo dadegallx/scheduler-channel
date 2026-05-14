@@ -290,16 +290,22 @@ await mcp.connect(new StdioServerTransport())
 // Initial load + register timers
 applyJobs(loadJobs(JOBS_FILE).jobs, mcp)
 
-// Watch jobs.json for changes. usePolling=false works fine on macOS/Linux
-// for a single file inside a stable directory.
-const watcher = chokidar.watch(JOBS_FILE, {
+// Watch the state directory (not the file directly) — atomic rename
+// (write tmp + mv, used by most editors and Claude Code's Write tool)
+// unlinks the watched inode, after which a single-file fs.watch goes
+// permanently stale. Watching the parent dir at depth 0 is robust.
+const watcher = chokidar.watch(STATE_DIR, {
   persistent: true,
   ignoreInitial: true,
+  depth: 0,
   awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
 })
-const reload = (): void => {
+const reload = (path: string): void => {
+  if (path !== JOBS_FILE) return
   try {
-    applyJobs(loadJobs(JOBS_FILE).jobs, mcp)
+    const { jobs } = loadJobs(JOBS_FILE)
+    applyJobs(jobs, mcp)
+    process.stderr.write(`scheduler: reloaded jobs.json (${jobs.length} job${jobs.length === 1 ? '' : 's'})\n`)
   } catch (err) {
     process.stderr.write(`scheduler: reload failed: ${err}\n`)
   }
