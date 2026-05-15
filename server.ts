@@ -21,7 +21,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { mkdirSync, writeFileSync, existsSync, rmSync, renameSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import chokidar from 'chokidar'
@@ -257,6 +257,25 @@ if (args[0] === '--fire-now') {
   process.exit(code)
 }
 
+// Singleton lock — mirrors the telegram channel's bot.pid trick (see
+// claude-plugins-official/telegram/server.ts:58–69). Scheduler doesn't have
+// an exclusive external resource the way Telegram's getUpdates does, but the
+// per-state-dir invariant we want is the same: exactly ONE MCP server emits
+// channel notifications for a given jobs.json, so the parent claude session
+// that owns the channel listener always receives the events. If another
+// server is already running in this STATE_DIR, SIGTERM it before we claim
+// ownership.
+const SERVER_PID_FILE = join(STATE_DIR, 'server.pid')
+try {
+  const prior = parseInt(readFileSync(SERVER_PID_FILE, 'utf8'), 10)
+  if (prior > 1 && prior !== process.pid) {
+    process.kill(prior, 0) // throws ESRCH if dead → outer catch skips SIGTERM
+    process.stderr.write(`scheduler: replacing prior owner pid=${prior}\n`)
+    process.kill(prior, 'SIGTERM')
+  }
+} catch {}
+writeFileSync(SERVER_PID_FILE, String(process.pid))
+
 const mcp = new Server(
   { name: 'scheduler', version: '0.0.1' },
   {
@@ -311,6 +330,10 @@ const reload = (path: string): void => {
   }
 }
 watcher.on('change', reload).on('add', reload).on('unlink', reload)
+// Emit a readiness signal once chokidar's initial scan completes. Without
+// this, tests that race a rename against watcher setup can drop the first
+// event. The line is harmless in production and load-bearing in tests.
+watcher.on('ready', () => process.stderr.write('scheduler: watcher ready\n'))
 
 let shuttingDown = false
 function shutdown(): void {

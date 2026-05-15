@@ -150,6 +150,15 @@ async function initialize(s: Server): Promise<any> {
   return resp
 }
 
+async function waitForWatcherReady(s: Server, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (s.stderr.some(l => l.includes('scheduler: watcher ready'))) return
+    await new Promise(r => setTimeout(r, 25))
+  }
+  throw new Error(`watcher ready stderr never appeared within ${timeoutMs}ms`)
+}
+
 async function fire(s: Server, name: string): Promise<void> {
   // test/fire is a JSON-RPC notification (no id). jsonrpc must be present
   // for JSONRPCMessageSchema in the MCP transport to accept it.
@@ -467,6 +476,7 @@ describe('jobs.json file watcher', () => {
     writeJobsAtomic(stateDir, [])
     server = await spawnServer(stateDir)
     await initialize(server)
+    await waitForWatcherReady(server)
 
     // Three successive atomic renames. Pre-fix: only the first reloads.
     const tags = ['one', 'two', 'three']
